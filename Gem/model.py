@@ -118,6 +118,15 @@ class embedding(nn.Module):
                 torch.empty((num_embeddings,embedding_dim)),
                 requires_grad=False
             )
+        self.quant =quant
+
+    def forward(self,x):
+        weight = self.weight
+        if self.quant:
+            weight = weight * self.weight_scaler.unsqueeze(-1)
+        output = F.embedding(x,weight)
+
+        return output
 
 
 
