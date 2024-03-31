@@ -103,5 +103,23 @@ class Linear(nn.Module):
         return output
 
 
+class embedding(nn.Module):
+
+    def __int__(self,num_embeddings:int, embedding_dim: int,quant:bool):
+        super().__int__()
+        if quant:
+            self.weight = nn.Parameter(
+                torch.empty((num_embeddings,embedding_dim),dtype=torch.int8),
+                requires_grad=False
+            )
+            self.weight_scaler = nn.Parameter(torch.Tensor(num_embeddings))
+        else:
+            self.weight = nn.Parameter(
+                torch.empty((num_embeddings,embedding_dim)),
+                requires_grad=False
+            )
+
+
+
 
 
