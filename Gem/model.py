@@ -164,6 +164,54 @@ class GemmaMLP(nn.Module):
         fuse = gate * up
         outputs = self.down_proj(fuse)
         return  outputs
+class GemmaAttention(nn.Module):
+    def __init__(self,
+                 hidden_size:int,
+                 num_heads:int,
+                 num_kv_heads:int,
+                 head_dim:int,
+                 quant:bool):
+        super().__init__()
+
+        self.num_heads = num_heads
+        self.num_kv_heads = num_kv_heads
+
+        assert self.num_heads % self.num_kv_heads == 0
+        self.num_queries_per_kv = self.num_heads // self.num_kv_heads
+
+        self.hidden_size = hidden_size
+        self.head_dim = head_dim
+
+        self.q_size = self.num_heads * self.head_dim
+        self.kv_size = self.num_kv_heads * self.head_dim
+
+        self.scaling = self.head_dim**-0.5
+
+        self.qkv_proj = Linear(
+            self.hidden_size,
+            (self.num_heads + 2 * self.num_kv_heads) * self.head_dim,
+            quant=quant)
+
+        self.o_proj = Linear(
+            self.num_heads * self.head_dim,
+            self.hidden_size,
+            quant=quant)
+
+    def forward(self,hidden_States:torch.Tensor,
+                freqs_cis:torch.Tensor,
+                kv_write_indices:torch.Tensor,
+                kv_cache:Tuple[torch.Tensor,torch.Tensor],
+                mask: torch.Tensor) -> torch.Tensor:
+        hidden_States_shape = hidden_States.shape
+        assert len(hidden_States_shape) == 3
+
+        batch_size, input_len, _ = hidden_States_shape
+
+        qkv = self.qkv_proj(hidden_States)
+        xq,xk,xv = qkv.split([self.q_size,self.kv_size,self.kv_size],
+                             dim = -1)
+
+
 
 
 
