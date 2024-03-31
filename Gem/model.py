@@ -129,6 +129,46 @@ class embedding(nn.Module):
         return output
 
 
+class RMSNorm(nn.module):
+    def __int__(self,dim:int,eps:float = 1e-6,add_unit_offset:bool = True):
+        super().__int__()
+        self.eps = eps
+        self.add_unit_offset = add_unit_offset
+        self.weight = nn.Parameter(torch.zeros(dim))
+
+    def _norm(self,x):
+        return x * torch.rsqrt(x.pow(2).mean(-1,keepdim=True) + self.eps)
+
+    def forward(self,x):
+        x = self._norm(x.float()).type_as(x)
+        if self.add_unit_offset:
+            output = x * (1 + self.weight)
+        else:
+            output = x * self.weight
+        return output
+
+class GemmaMLP(nn.Module):
+    def __init__(self,
+                 hidden_Size:int,
+                 intermediate_size:int,
+                 quant:bool):
+        super().__init__()
+        self.gate_proj = Linear(hidden_Size,intermediate_size,quant)
+        self.up_proj = Linear(hidden_Size,intermediate_size,quant)
+        self.down_proj = Linear(intermediate_size,hidden_Size,quant)
+
+    def forward(self,x):
+        gate = self.gate_proj(x)
+        gate = F.gelu(gate,approximate="tanh")
+        up = self.up_proj(x)
+        fuse = gate * up
+        outputs = self.down_proj(fuse)
+        return  outputs
+
+
+
+
+
 
 
 
