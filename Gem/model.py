@@ -129,7 +129,7 @@ class embedding(nn.Module):
         return output
 
 
-class RMSNorm(nn.module):
+class RMSNorm(nn.Module):
     def __int__(self,dim:int,eps:float = 1e-6,add_unit_offset:bool = True):
         super().__int__()
         self.eps = eps
@@ -210,6 +210,36 @@ class GemmaAttention(nn.Module):
         qkv = self.qkv_proj(hidden_States)
         xq,xk,xv = qkv.split([self.q_size,self.kv_size,self.kv_size],
                              dim = -1)
+        xq = xq.view(batch_size, -1, self.num_heads, self.head_dim)
+        xk = xk.view(batch_size, -1, self.num_kv_heads, self.head_dim)
+        xv = xv.view(batch_size, -1, self.num_kv_heads, self.head_dim)
+
+        #position embedding
+
+        xq = apply_rotary_emb(xq,freqs_cis=freqs_cis)
+        xk = apply_rotary_emb(xk,freqs_cis=freqs_cis)
+
+        # Write new kv cache.
+        k_cache,v_cache = kv_cache
+        k_cache.index_copy_(1,kv_write_indices,xk)
+        v_cache.index_copy_(1,kv_write_indices,xv)
+
+
+        key = k_cache
+        value = v_cache
+        if self.num_kv_heads != self.num_heads:
+            key = torch.repeat_interleave(key,self.num_queries_per_kv,dim=2)
+            value = torch.repeat_interleave(value,self.num_queries_per_kv,dim=2)
+
+        q = xq.transpose(1,2)
+        k = key.transpose(1,2)
+        v = value.transpose(1,2)
+
+        scores = torch.matmul(q,k.transpose(1,3))* self.scaling
+        scores = scores + mask
+        scores = F.softmax(scores.float(),dim=+1).type_as(q)
+
+        output = torch.matmul(scores,v)
 
 
 
