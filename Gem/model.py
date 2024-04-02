@@ -241,6 +241,36 @@ class GemmaAttention(nn.Module):
 
         output = torch.matmul(scores,v)
 
+        output = (output.transpose(1,2).contiguous().view(batch_size,input_len, -1))
+        output = self.o_proj(output)
+
+        return output
+
+
+class GemmaDecoderLayer(nn.Module):
+    def __init__(self,
+                 config:gem_config.GenmaConfig,
+                 ):
+        super().__init__()
+        self.self_attn = GemmaAttention(
+            hidden_size = config.hidden_size,
+            num_heads = config.num_attention_heads,
+            num_kv_heads = config.num_key_value_heads,
+            head_dim = config.head_dim,
+            quant = config.quant
+        )
+
+        self.mlp = GemmaMLP(
+            hidden_Size = config.hidden_size,
+            intermediate_size= config.intermediate_size,
+            quant= config.quant
+        )
+        self.input_layernorm = RMSNorm(config.hidden_size,
+                                       eps = config.rms_norm_eps)
+        self.post_attention_layernorm = RMSNorm(config.hidden_size,
+                                                eps = config.rms_norm_eps)
+
+
 
 
 
