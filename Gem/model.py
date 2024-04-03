@@ -270,6 +270,9 @@ class GemmaDecoderLayer(nn.Module):
         self.post_attention_layernorm = RMSNorm(config.hidden_size,
                                                 eps = config.rms_norm_eps)
 
+    def forward(self):
+        pass
+
 
 
 
