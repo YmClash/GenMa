@@ -4,23 +4,29 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Any, List, Optional, Sequence, Tuple, Union
 
+from torch import Tensor
+
 import config as gem_config
+from Gem import tokenizer
+
 
 
 class Sampler(nn.Module):
-    def __init__(self, vocab_size: int):
+    def __init__(self, vocab_size: int, config: gem_config.GenmaConfig):
         super().__init__()
         self.vocab_size = vocab_size
+        self.config = config
+
 
     @torch.no_grad()
     def forward(self,
                 embedding: torch.Tensor,
                 hidden_states: torch.Tensor,
                 output_position: torch.Tensor,
-                temperatures: torch.Tensor,
+                temperatures: Union[torch.Tensor, None],
                 top_ps: torch.Tensor,
-                tops_ks: torch.Tensor,
-                embedding_bias) -> torch.Tensor:
+                top_ks: torch.Tensor,
+                embedding_bias) -> tuple[Tensor, Tensor] | Tensor:            #Tuple[torch.Tensor, torch.Tensor]:
 
         # on choisi  le dernier element de chaque sequence
         hidden_states = hidden_states.index_select(1, output_position).squeeze(dim=1)
@@ -28,8 +34,14 @@ class Sampler(nn.Module):
         if embedding_bias is not None:
             logits += embedding_bias
 
+
+        if self.config.final_logit_softcapping is not None:
+            logits = logits / self.config.final_logit_softcapping
+            logits = torch.tanh(logits)
+            logits = logits * self.config.final_logit_softcapping
+
         if temperatures is None:
-            return torch.argmax(logits, dim=-1).squeeze(dim=-1)
+            return torch.argmax(logits, dim=-1).squeeze(dim=-1), logits
 
         # applique la temperature
         logits.div_(temperatures.unsqueeze(dim=1))
@@ -43,19 +55,24 @@ class Sampler(nn.Module):
         top_ps_mask = (probs_sum - probs_sort) > top_ps.unsqueeze(dim=1)
         probs_sort = torch.where(top_ps_mask, 0, probs_sort)
 
-        tops_ks_mask = torch.arange(probs_idx.shape[-1], device=probs_idx.device)
-        tops_ks_mask = tops_ks_mask.expand(probs_idx.shape[0], -1)
-        top_ps_mask = top_ps_mask >= tops_ks.unsqueeze(dim=1)
-        probs_sort = torch.where(tops_ks_mask, 0, probs_sort)
+        top_ks_mask = torch.arange(probs_idx.shape[-1],
+                                   device=probs_idx.device)
+        top_ks_mask = top_ks_mask.expand(probs_idx.shape[0], -1)
+        top_ks_mask = top_ks_mask >= top_ks.unsqueeze(dim=1)
+        probs_sort = torch.where(top_ks_mask, 0, probs_sort)
 
         # renormalisation
 
         probs_sort.div_(probs_sort.sum(dim=-1, keepdim=True))
-        probs = torch.gather(probs_sort, dim=-1, index=torch.argsort(probs_idx, dim=-1))
+        probs = torch.gather(probs_sort,
+                             dim=-1,
+                             index=torch.argsort(probs_idx, dim=-1))
 
-        next_token_ids = torch.multinomial(probs, num_samples=1, replacement=True).squeeze(dim=-1)
+        next_token_ids = torch.multinomial(probs,
+                                           num_samples=1,
+                                           replacement=True).squeeze(dim=-1)
 
-        return next_token_ids
+        return next_token_ids,logits
 
 
 def precompute_freqs_ids(dim: int,
@@ -170,7 +187,10 @@ class GemmaAttention(nn.Module):
                  num_heads:int,
                  num_kv_heads:int,
                  head_dim:int,
-                 quant:bool):
+                 quant:bool,
+                 attn_types:gem_config.AttentionType,
+                 sliding_windows_size:Optional[int] = None):
+
         super().__init__()
 
         self.num_heads = num_heads
@@ -235,15 +255,32 @@ class GemmaAttention(nn.Module):
         k = key.transpose(1,2)
         v = value.transpose(1,2)
 
-        scores = torch.matmul(q,k.transpose(1,3))* self.scaling
+        q.mul_(self.scaling)
+        scores = torch.matmul(q, k.transpose(2, 3))
+        if (
+                self.attn_type == gem_config.AttentionType.LOCAL_SLIDING
+                and self.sliding_window_size is not None
+        ):
+            all_ones = torch.ones_like(mask)
+            sliding_mask = torch.triu(
+                all_ones, -1 * self.sliding_window_size + 1
+            ) * torch.tril(all_ones, self.sliding_window_size - 1)
+            mask = torch.where(sliding_mask == 1, mask, -2.3819763e38)
+
+        if self.attn_logit_softcapping is not None:
+            scores = scores / self.attn_logit_softcapping
+            scores = torch.tanh(scores)
+            scores = scores * self.attn_logit_softcapping
         scores = scores + mask
-        scores = F.softmax(scores.float(),dim=+1).type_as(q)
+        scores = F.softmax(scores.float(), dim=-1).type_as(q)
 
-        output = torch.matmul(scores,v)
+        # [batch_size, n_local_heads, input_len, head_dim]
+        output = torch.matmul(scores, v)
 
-        output = (output.transpose(1,2).contiguous().view(batch_size,input_len, -1))
+        # [batch_size, input_len, hidden_dim]
+        output = (output.transpose(1, 2).contiguous().view(
+            batch_size, input_len, -1))
         output = self.o_proj(output)
-
         return output
 
 
